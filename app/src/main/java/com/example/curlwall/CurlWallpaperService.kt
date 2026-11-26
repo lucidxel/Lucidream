@@ -63,6 +63,14 @@ class CurlWallpaperService : WallpaperService() {
         private var speed = 1f
         private var sizeMul = 1f
         private var tiltOn = true
+        private var unlockOn = true
+        private var exitT = 0L
+        private val rcv = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context, i: android.content.Intent) {
+                if (i.action == android.content.Intent.ACTION_USER_PRESENT && unlockOn) exitT = SystemClock.uptimeMillis()
+                else if (i.action == android.content.Intent.ACTION_SCREEN_OFF) exitT = 0L
+            }
+        }
         private val flow = floatArrayOf(14f, 0f, 6f, 34f)
         private val waveM = floatArrayOf(1f, 0.4f, 0.5f, 1.4f)
         private val driftM = floatArrayOf(1f, 0.4f, 2.2f, 0.6f)
@@ -78,6 +86,7 @@ class CurlWallpaperService : WallpaperService() {
             speed = p.getFloat("speed", 1f)
             sizeMul = p.getFloat("size", 1f)
             tiltOn = p.getBoolean("tilt", true)
+            unlockOn = p.getBoolean("unlock", true)
             if (!tiltOn) tiltTarget = 0f
             frameMs = if (p.getBoolean("fps60", false)) 16L else 33L
         }
@@ -115,6 +124,18 @@ class CurlWallpaperService : WallpaperService() {
         override fun onCreate(holder: SurfaceHolder) {
             super.onCreate(holder)
             setTouchEventsEnabled(true)
+            val f = android.content.IntentFilter().apply {
+                addAction(android.content.Intent.ACTION_USER_PRESENT)
+                addAction(android.content.Intent.ACTION_SCREEN_OFF)
+            }
+            if (Build.VERSION.SDK_INT >= 33)
+                this@CurlWallpaperService.registerReceiver(rcv, f, Context.RECEIVER_NOT_EXPORTED)
+            else this@CurlWallpaperService.registerReceiver(rcv, f)
+        }
+
+        override fun onDestroy() {
+            try { this@CurlWallpaperService.unregisterReceiver(rcv) } catch (_: Exception) {}
+            super.onDestroy()
         }
 
         override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -192,6 +213,7 @@ class CurlWallpaperService : WallpaperService() {
 
         private fun render(canvas: Canvas) {
             canvas.drawColor(bg)
+            if (exitT > 0L && SystemClock.uptimeMillis() - exitT > 1500L) return
             canvas.save()
             canvas.scale(k, k)
 
@@ -243,6 +265,13 @@ class CurlWallpaperService : WallpaperService() {
                     val fade = 1f - sN.pow(1.6f) * 0.55f
                     var a = vis * (if (sN < 0.08f) 1f - (1f - lum) * sN / 0.08f * 0.7f else lum) * fade
                     a *= 1f - sm(0.82f, 1f, sN)
+                    var u = 0f
+                    if (exitT > 0L) {
+                        val ph = (now - exitT) / 1000f
+                        u = ((ph - (1f - sN) * 0.5f) / 0.7f).coerceIn(0f, 1f)
+                        a *= 1f - u * u * u
+                        if (u >= 1f) continue
+                    }
 
                     val sp = 0.25f + h2 * 0.9f
                     val amp = (0.04f + h3 * 0.14f) * driftM[anim]
@@ -296,10 +325,10 @@ class CurlWallpaperService : WallpaperService() {
                         val qsp = csp + qy[q] * h * g
                         val th = max(0f, qsp) / Rc
                         val yy = if (qsp < 0f) qsp else Rc * sin(th)
-                        val zz = (if (qsp < 0f) 0f else Rc * (1f - cos(th))) - lift
+                        val zz = (if (qsp < 0f) 0f else Rc * (1f - cos(th))) - lift - u * u * Rc * 1.2f
                         val f = D / (D + zz)
                         val sx = cx + (qxp - cx) * f
-                        val sy = yBase - yy * f
+                        val sy = yBase - yy * f + u * u * H * 0.6f
                         if (q == 0) path.moveTo(sx, sy) else path.lineTo(sx, sy)
                     }
                     path.close()
