@@ -55,22 +55,24 @@ class CurlWallpaperService : WallpaperService() {
 
         private var bg = Color.WHITE
         private var bg2 = Color.WHITE
+        private var grad = -1
+        private var gstyle = 0
         private var bgDirty = true
-        private var anim = 0
+        private var anim = 2
         private var cover = 0.66f
         private var speed = 1f
         private var sizeMul = 1f
         private var blurS = 0.35f
         private var tiltOn = true
-        private var tmode = 0          // 0 = fold (trapezoids), 1 = classic parallax
+        private var tmode = 0
         private var unlockOn = true
         private var rr = 0f
         private var ua = 0
-        //                              Wave   Breathe Drift Flow   Ripple Sway Cascade Orbit
-        private val flow = floatArrayOf(-14f, 0f, 6f, -34f, -8f, 10f, 0f, 5f)
-        private val waveM = floatArrayOf(1f, 0.4f, 0.5f, 1.4f, 0.3f, 0.6f, 1.2f, 0.5f)
-        private val driftM = floatArrayOf(1f, 0.4f, 2.2f, 0.6f, 0.5f, 0.5f, 0.3f, 1.6f)
-        private val breathM = floatArrayOf(1f, 3f, 1f, 0.6f, 1f, 1f, 1f, 1f)
+        //                              Cascade Flow  Wave   Ripple Breathe Orbit
+        private val flow = floatArrayOf(0f, -34f, -14f, -8f, 0f, 5f)
+        private val waveM = floatArrayOf(1.2f, 1.4f, 1f, 0.3f, 0.4f, 0.5f)
+        private val driftM = floatArrayOf(0.3f, 0.6f, 1f, 0.5f, 0.4f, 1.6f)
+        private val breathM = floatArrayOf(1f, 0.6f, 1f, 1f, 3f, 1f)
         //                               Down  iOS  Zoom  Dissolve
         private val vyMul = floatArrayOf(1f, 0f, 0f, 0f)
         private val zMul = floatArrayOf(1.2f, 0f, 1.9f, 0f)
@@ -112,9 +114,11 @@ class CurlWallpaperService : WallpaperService() {
             val p = Config.prefs(this@CurlWallpaperService)
             bg = p.getInt("bg", Color.WHITE)
             bg2 = p.getInt("bg2", bg)
+            grad = p.getInt("grad", -1)
+            gstyle = p.getInt("gstyle", 0).coerceIn(0, 2)
             bgDirty = true
-            paint.color = Config.fgFor(bg, bg2)
-            anim = p.getInt("anim", 0).coerceIn(0, 7)
+            paint.color = Config.fg(p)
+            anim = p.getInt("anim", 2).coerceIn(0, 5)
             cover = p.getFloat("cover", 0.66f)
             speed = p.getFloat("speed", 1f)
             sizeMul = p.getFloat("size", 1f)
@@ -256,14 +260,18 @@ class CurlWallpaperService : WallpaperService() {
             val now = SystemClock.uptimeMillis()
             checkLock(now)
 
-            if (bg2 == bg) canvas.drawColor(bg) else {
+            val gradOn = grad in Config.GRADS.indices
+            if (gradOn) {
+                Config.drawGrad(canvas, 0f, 0f, pw.toFloat(), ph.toFloat(), Config.GRADS[grad], gstyle, (now - t0) / 1000f)
+            } else if (bg2 == bg) canvas.drawColor(bg) else {
                 if (bgDirty) {
                     bgPaint.shader = LinearGradient(0f, 0f, 0f, ph.toFloat(), bg, bg2, Shader.TileMode.CLAMP)
                     bgDirty = false
                 }
                 canvas.drawRect(0f, 0f, pw.toFloat(), ph.toFloat(), bgPaint)
             }
-            if (exitT > 0L && now - exitT > 1800L) return true
+            // after the unlock animation only the background remains (keep animating it if it is a gradient)
+            if (exitT > 0L && now - exitT > 1800L) return !gradOn
 
             canvas.save()
             canvas.scale(k, k)
@@ -287,9 +295,9 @@ class CurlWallpaperService : WallpaperService() {
             val h = c * 0.34f * sizeMul
             val base = floor(S / c).toInt()
             val frac = S - base * c
-            // classic mode: slide the grid; fold mode: rotate it in 3D (trapezoids)
             val Xt = X + tilt * c * (if (tmode == 1) 1.2f else 0.1f)
-            val phi = if (tmode == 0) tilt * 0.6f else 0f
+            // fold mode: grid turns AGAINST the phone's rotation
+            val phi = if (tmode == 0) -tilt * 0.6f else 0f
             val cph = cos(phi)
             val sph = sin(phi)
             val colShift = floor(Xt / c).toInt()
@@ -316,8 +324,8 @@ class CurlWallpaperService : WallpaperService() {
                     val thr = 0.05f + 0.5f * sN * sN
                     val vis = sm(thr, thr + 0.25f, hh)
                     var wave = 0.5f + 0.5f * sin(t * 0.55f * waveM[an] - rowId * 0.45f + col * 0.35f)
-                    if (an == 4) wave = 0.5f + 0.5f * sin(t * 1.3f - hypot(xb - cx, s0 * 0.9f) * 0.03f)
-                    if (an == 6) wave = 0.5f + 0.5f * sin(t * 1.5f - rowId * 0.8f)
+                    if (an == 3) wave = 0.5f + 0.5f * sin(t * 1.3f - hypot(xb - cx, s0 * 0.9f) * 0.03f)
+                    if (an == 0) wave = 0.5f + 0.5f * sin(t * 1.5f - rowId * 0.8f)
                     val own = 0.5f + 0.5f * sin(t * (0.25f + h2 * 0.6f) + h3 * TWO_PI)
                     val lum = 0.15f + 0.85f * (0.55f * wave + 0.45f * own)
                     val fade = 1f - sN.pow(1.6f) * 0.55f
@@ -341,12 +349,11 @@ class CurlWallpaperService : WallpaperService() {
                     val sp = 0.25f + h2 * 0.9f
                     val amp = (0.04f + h3 * 0.14f) * driftM[an]
                     val mx = sin(t * sp + hh * TWO_PI) * c * amp
-                    val ms = (if (an == 7) sin(t * sp + hh * TWO_PI) else cos(t * sp * 0.8f + h3 * TWO_PI)) * c * amp
+                    val ms = (if (an == 5) sin(t * sp + hh * TWO_PI) else cos(t * sp * 0.8f + h3 * TWO_PI)) * c * amp
                     var br = 1f + 0.1f * breathM[an] * sin(t * (0.3f + h3 * 0.7f) + h2 * TWO_PI)
-                    if (an == 6) br += 0.22f * sin(t * 1.5f - rowId * 0.8f)
-                    val sway = if (an == 5) sin(t * 0.6f + rowId * 0.5f) * c * 0.5f * (0.4f + 0.6f * sN) else 0f
+                    if (an == 0) br += 0.22f * sin(t * 1.5f - rowId * 0.8f)
 
-                    val x0 = xb + mx + sway
+                    val x0 = xb + mx
                     val sc0 = s0 + ms
 
                     val th0 = max(0f, sc0) / Rc
@@ -399,7 +406,6 @@ class CurlWallpaperService : WallpaperService() {
                         pxs[q] = cx + dxq * cph * f
                         pys[q] = yBase - yy * f + fly * H * 0.6f * vyMul[ua]
                         if (ua == 1 && u > 0f) {
-                            // iOS-style: everything blasts outward from the centre, toward the viewer
                             val eu = u * u * (3f - 2f * u)
                             val s = 1f + eu * eu * 2.6f
                             pxs[q] = cx + (pxs[q] - cx) * s
