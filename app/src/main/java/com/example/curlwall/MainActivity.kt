@@ -3,17 +3,20 @@ package com.example.curlwall
 import android.app.Activity
 import android.app.WallpaperManager
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.*
 import android.graphics.drawable.*
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.*
+import kotlin.math.sin
 
 class Glass(private val r: Float, private val dark: Boolean, private val strong: Boolean = false) : Drawable() {
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -31,6 +34,27 @@ class Glass(private val r: Float, private val dark: Boolean, private val strong:
     override fun setAlpha(a: Int) {}
     override fun setColorFilter(cf: ColorFilter?) {}
     @Deprecated("x") override fun getOpacity() = PixelFormat.TRANSLUCENT
+}
+
+/** Little pixel mascot for the easter egg. */
+class Clawd(ctx: Context) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val u = 8f * ctx.resources.displayMetrics.density
+    // x, y, w, h on a 13-column grid
+    private val body = listOf(intArrayOf(2, 0, 9, 4), intArrayOf(0, 1, 2, 2), intArrayOf(11, 1, 2, 2),
+        intArrayOf(3, 4, 1, 2), intArrayOf(5, 4, 1, 2), intArrayOf(7, 4, 1, 2), intArrayOf(9, 4, 1, 2))
+    override fun onDraw(cv: Canvas) {
+        val t = SystemClock.uptimeMillis() / 1000.0
+        val ox = (width - 13 * u) / 2f
+        val oy = (height - 6 * u) / 2f + (sin(t * 2.2) * u * 0.25).toFloat()
+        p.color = Color.parseColor("#D97757")
+        for (r in body) cv.drawRect(ox + r[0] * u, oy + r[1] * u, ox + (r[0] + r[2]) * u, oy + (r[1] + r[3]) * u, p)
+        val blink = (t % 4.0) < 0.12
+        p.color = Color.parseColor("#1A1A1A")
+        val eh = if (blink) 0.4f else 2f
+        for (x in intArrayOf(4, 8)) cv.drawRect(ox + x * u, oy + 1 * u + (2f - eh) * u / 2f, ox + (x + 1) * u, oy + 1 * u + (2f - eh) * u / 2f + eh * u, p)
+        postInvalidateOnAnimation()
+    }
 }
 
 class MainActivity : Activity() {
@@ -105,7 +129,7 @@ class MainActivity : Activity() {
             (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or (if (android.os.Build.VERSION.SDK_INT >= 26) View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR else 0))
 
         val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(64), dp(16), dp(130))
+            orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(64), dp(16), dp(150))
         }
         root.addView(TextView(this).apply {
             text = "Lucidream"; textSize = 36f; setTextColor(ink); gravity = Gravity.CENTER
@@ -221,13 +245,15 @@ class MainActivity : Activity() {
             "41295A-2F0743 D4FC79-96E6A1 F6D365-FDA085 8E2DE2-4A00E0 232526-414345 E0EAFC-CFDEF3", true)
         refresh()
 
-        // ---------- motion / shape / unlock
+        // ---------- motion / shape / unlock / tilt
         header("Motion", root)
         segmented(group(root), listOf(listOf("Wave", "Breathe", "Drift", "Flow"), listOf("Ripple", "Sway", "Cascade", "Orbit")), "anim")
         header("Corners", root)
         segmented(group(root), listOf(listOf("Sharp", "Soft", "Round", "Circle")), "round")
         header("Unlock animation", root)
         segmented(group(root), listOf(listOf("Down", "iOS", "Zoom", "Dissolve")), "uanim")
+        header("Tilt style", root)
+        segmented(group(root), listOf(listOf("Fold", "Parallax")), "tmode")
 
         // ---------- settings
         header("Settings", root)
@@ -279,15 +305,23 @@ class MainActivity : Activity() {
             sg.addView(row, LinearLayout.LayoutParams(MATCH_PARENT, dp(56)))
         }
         toggle("Unlock animation", "unlock", true)
-        toggle("Tilt parallax", "tilt", true)
+        toggle("Tilt effect", "tilt", true)
         toggle("Smooth 60 FPS", "fps60", false)
 
+        // ---------- easter egg (visible only at the very bottom)
+        root.addView(Clawd(this), LinearLayout.LayoutParams(MATCH_PARENT, dp(70)).apply { topMargin = dp(56) })
+        root.addView(TextView(this).apply {
+            text = "limits... made by p1xeltech"; textSize = 11f; setTextColor(sub); gravity = Gravity.CENTER; alpha = 0.8f
+        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(4) })
+
+        // ---------- floating button: white in light theme, black in dark theme
         val btn = TextView(this).apply {
             text = "Set wallpaper"; textSize = 18f; gravity = Gravity.CENTER; typeface = medium
-            setTextColor(if (dark) Color.BLACK else Color.WHITE)
+            setTextColor(if (dark) Color.WHITE else ink)
             background = LayerDrawable(arrayOf(
-                gd(if (dark) Color.WHITE else Color.parseColor("#1C1C1E"), if (dark) Color.parseColor("#E5E5EA") else Color.BLACK, 30),
-                Glass(dp(30).toFloat(), !dark)))
+                gd(if (dark) Color.parseColor("#1C1C1E") else Color.WHITE, if (dark) Color.BLACK else Color.parseColor("#F2F2F7"), 30),
+                Glass(dp(30).toFloat(), dark)))
+            elevation = dp(6).toFloat()
             isClickable = true
             setOnClickListener {
                 try {
