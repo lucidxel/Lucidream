@@ -62,17 +62,18 @@ class CurlWallpaperService : WallpaperService() {
         private var sizeMul = 1f
         private var blurS = 0.35f
         private var tiltOn = true
+        private var tmode = 0          // 0 = fold (trapezoids), 1 = classic parallax
         private var unlockOn = true
         private var rr = 0f
         private var ua = 0
-        //                              Wave   Breathe Drift Flow Ripple Sway Cascade Orbit
-        private val flow = floatArrayOf(-14f, 0f, 6f, 34f, -8f, 10f, 0f, 5f)
+        //                              Wave   Breathe Drift Flow   Ripple Sway Cascade Orbit
+        private val flow = floatArrayOf(-14f, 0f, 6f, -34f, -8f, 10f, 0f, 5f)
         private val waveM = floatArrayOf(1f, 0.4f, 0.5f, 1.4f, 0.3f, 0.6f, 1.2f, 0.5f)
         private val driftM = floatArrayOf(1f, 0.4f, 2.2f, 0.6f, 0.5f, 0.5f, 0.3f, 1.6f)
         private val breathM = floatArrayOf(1f, 3f, 1f, 0.6f, 1f, 1f, 1f, 1f)
-        //                               Down  iOS    Zoom  Dissolve
-        private val vyMul = floatArrayOf(1f, -0.25f, 0f, 0f)
-        private val zMul = floatArrayOf(1.2f, 1.5f, 1.9f, 0f)
+        //                               Down  iOS  Zoom  Dissolve
+        private val vyMul = floatArrayOf(1f, 0f, 0f, 0f)
+        private val zMul = floatArrayOf(1.2f, 0f, 1.9f, 0f)
         private val pxs = FloatArray(4)
         private val pys = FloatArray(4)
 
@@ -119,6 +120,7 @@ class CurlWallpaperService : WallpaperService() {
             sizeMul = p.getFloat("size", 1f)
             blurS = p.getFloat("blur", 0.35f)
             tiltOn = p.getBoolean("tilt", true)
+            tmode = p.getInt("tmode", 0).coerceIn(0, 1)
             unlockOn = p.getBoolean("unlock", true)
             rr = floatArrayOf(0f, 0.2f, 0.38f, 0.5f)[p.getInt("round", 0).coerceIn(0, 3)]
             ua = p.getInt("uanim", 0).coerceIn(0, 3)
@@ -228,7 +230,7 @@ class CurlWallpaperService : WallpaperService() {
         }
 
         override fun onSensorChanged(event: SensorEvent) {
-            tiltTarget = (-event.values[0] / 9.8f).coerceIn(-1f, 1f)
+            tiltTarget = (-event.values[0] / 6f).coerceIn(-1f, 1f)
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -285,7 +287,11 @@ class CurlWallpaperService : WallpaperService() {
             val h = c * 0.34f * sizeMul
             val base = floor(S / c).toInt()
             val frac = S - base * c
-            val Xt = X + tilt * c * 1.2f
+            // classic mode: slide the grid; fold mode: rotate it in 3D (trapezoids)
+            val Xt = X + tilt * c * (if (tmode == 1) 1.2f else 0.1f)
+            val phi = if (tmode == 0) tilt * 0.6f else 0f
+            val cph = cos(phi)
+            val sph = sin(phi)
             val colShift = floor(Xt / c).toInt()
             val xFrac = ((Xt % c) + c) % c
 
@@ -323,7 +329,7 @@ class CurlWallpaperService : WallpaperService() {
                         val ph0 = (now - exitT) / 1000f
                         val dl = when (ua) {
                             0 -> (1f - sN) * 0.5f
-                            1 -> sN * 0.35f + abs(xb - cx) / W * 0.3f
+                            1 -> sN * 0.45f + hh * 0.1f
                             2 -> hh * 0.15f
                             else -> hh * 0.5f
                         }
@@ -378,8 +384,7 @@ class CurlWallpaperService : WallpaperService() {
                     val cxp = x0 + dxn * e * c * 0.22f
                     val csp = sc0 - dyn * e * c * 0.22f
                     val lift = e * c * 0.45f
-                    val g = (1f - 0.72f * sN.pow(0.9f)) * br * (1f + 0.12f * e) *
-                        (1f + (if (ua == 1) 0.6f * u else 0f) - (if (ua == 3) 0.6f * u else 0f))
+                    val g = (1f - 0.72f * sN.pow(0.9f)) * br * (1f + 0.12f * e) * (1f - (if (ua == 3) 0.6f * u else 0f))
                     val fly = u * u
 
                     for (q in 0 until 4) {
@@ -387,10 +392,19 @@ class CurlWallpaperService : WallpaperService() {
                         val qsp = csp + qy[q] * h * g
                         val th = max(0f, qsp) / Rc
                         val yy = if (qsp < 0f) qsp else Rc * sin(th)
-                        val zz = (if (qsp < 0f) 0f else Rc * (1f - cos(th))) - lift - fly * Rc * zMul[ua]
-                        val f = D / (D + zz)
-                        pxs[q] = cx + (qxp - cx) * f
+                        val dxq = qxp - cx
+                        val zz = (if (qsp < 0f) 0f else Rc * (1f - cos(th))) - lift -
+                            fly * Rc * zMul[ua] + dxq * sph * 2.4f
+                        val f = D / max(D * 0.15f, D + zz)
+                        pxs[q] = cx + dxq * cph * f
                         pys[q] = yBase - yy * f + fly * H * 0.6f * vyMul[ua]
+                        if (ua == 1 && u > 0f) {
+                            // iOS-style: everything blasts outward from the centre, toward the viewer
+                            val eu = u * u * (3f - 2f * u)
+                            val s = 1f + eu * eu * 2.6f
+                            pxs[q] = cx + (pxs[q] - cx) * s
+                            pys[q] = H * 0.5f + (pys[q] - H * 0.5f) * s
+                        }
                     }
                     buildPath()
 
