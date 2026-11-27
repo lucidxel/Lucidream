@@ -4,425 +4,243 @@ import android.app.Activity
 import android.app.WallpaperManager
 import android.content.ComponentName
 import android.content.Intent
-import android.content.SharedPreferences
+import android.content.res.ColorStateList
 import android.content.res.Configuration
-import android.graphics.BitmapFactory
-import android.graphics.Color
-import android.graphics.Typeface
+import android.graphics.*
+import android.graphics.drawable.*
 import android.os.Bundle
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.View
-import android.view.ViewGroup
-import android.view.animation.DecelerateInterpolator
-import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
-import android.widget.Toast
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
-import java.io.File
-import kotlin.math.max
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.widget.*
+
+/** Liquid-glass surface: translucent fill + thin outline bright at top and bottom edges. */
+class Glass(private val r: Float, private val dark: Boolean, private val strong: Boolean = false) : Drawable() {
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3f }
+    override fun draw(c: Canvas) {
+        val b = RectF(bounds).apply { inset(1.5f, 1.5f) }
+        fill.color = if (dark) (if (strong) 0x40FFFFFF else 0x1FFFFFFF) else (if (strong) 0xFFFFFFFF.toInt() else 0xB8FFFFFF.toInt())
+        c.drawRoundRect(b, r, r, fill)
+        val top = if (dark) 0x80FFFFFF.toInt() else 0xFFFFFFFF.toInt()
+        val bot = if (dark) 0x40FFFFFF else 0x30000000
+        line.shader = LinearGradient(0f, b.top, 0f, b.bottom, intArrayOf(top, 0x00FFFFFF, 0x00FFFFFF, bot),
+            floatArrayOf(0f, 0.28f, 0.72f, 1f), Shader.TileMode.CLAMP)
+        c.drawRoundRect(b, r, r, line)
+    }
+    override fun setAlpha(a: Int) {}
+    override fun setColorFilter(cf: ColorFilter?) {}
+    @Deprecated("x") override fun getOpacity() = PixelFormat.TRANSLUCENT
+}
 
 class MainActivity : Activity() {
-
-    private lateinit var prefs: SharedPreferences
-    private var dark = false
-    private var accent = Color.parseColor("#6C5CE7")
-    private var topInset = 0
-    private var bottomInset = 0
-
-    private lateinit var root: FrameLayout
-    private lateinit var dock: LinearLayout
-    private lateinit var scrim: View
-    private lateinit var sheet: LinearLayout
-    private lateinit var scroll: ScrollView
-    private lateinit var content: LinearLayout
-    private var primaryBtn: TextView? = null
-    private var sheetOpen = false
-    private var sheetHeight = 0
-
-    private val textColor get() = if (dark) Color.rgb(245, 245, 247) else Color.rgb(17, 17, 20)
-    private val subColor get() = if (dark) Color.argb(150, 245, 245, 247) else Color.argb(140, 17, 17, 20)
-    private val bgColor get() = if (dark) Color.rgb(10, 10, 14) else Color.rgb(242, 242, 246)
-
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private val serif: Typeface = Typeface.create("serif", Typeface.NORMAL)
-    private val serifItalic: Typeface = Typeface.create("serif", Typeface.ITALIC)
+    private val prefs by lazy { Config.prefs(this) }
+    private val dark by lazy { (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES }
+    private val accent = Color.parseColor("#0A84FF")
+    private val ink by lazy { if (dark) Color.WHITE else Color.parseColor("#111114") }
+    private val sub by lazy { if (dark) Color.parseColor("#9A9AA2") else Color.parseColor("#6E6E73") }
+    private lateinit var preview: View
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        prefs = Config.prefs(this)
-        dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-        accent = Palettes.all[Config.Snap(prefs).palette].accent
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.statusBarColor = Color.TRANSPARENT
-        window.navigationBarColor = Color.TRANSPARENT
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            isAppearanceLightStatusBars = !dark
-            isAppearanceLightNavigationBars = !dark
-        }
-        buildUi()
+    private fun bgDraw(c1: Int, c2: Int, r: Int) = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(c1, c2))
+        .apply { cornerRadius = dp(r).toFloat() }
+
+    private fun pair(s: String): Pair<Int, Int> {
+        val p = s.split("-"); val a = Color.parseColor("#" + p[0]); return a to (if (p.size > 1) Color.parseColor("#" + p[1]) else a)
     }
 
-    // ---------------------------------------------------------------- UI
-
-    private fun buildUi() {
-        root = FrameLayout(this).apply { setBackgroundColor(bgColor) }
-
-        // Title block, dead centre
-        val titleBlock = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-        }
-        val title = TextView(this).apply {
-            text = "Lucidream"
-            typeface = serif
-            textSize = 46f
-            letterSpacing = 0.015f
-            setTextColor(textColor)
-            gravity = Gravity.CENTER
-        }
-        val sub = TextView(this).apply {
-            text = "Live Wallpaper"
-            typeface = serifItalic
-            textSize = 16f
-            letterSpacing = 0.08f
-            setTextColor(subColor)
-            gravity = Gravity.CENTER
-            setPadding(0, dp(6), 0, 0)
-        }
-        titleBlock.addView(title)
-        titleBlock.addView(sub)
-        root.addView(titleBlock, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
-        titleBlock.alpha = 0f
-        titleBlock.translationY = dp(14).toFloat()
-        titleBlock.animate().alpha(1f).translationY(0f).setDuration(700).setInterpolator(DecelerateInterpolator(2f)).start()
-
-        // Bottom dock
-        dock = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
-        primaryBtn = glassButton("Set Wallpaper", accent) { setWallpaper() }
-        val customize = glassButton("Customize", null) { openSheet() }
-        dock.addView(primaryBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(6) })
-        dock.addView(customize, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = dp(6) })
-        root.addView(dock, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM).apply {
-            leftMargin = dp(24); rightMargin = dp(24); bottomMargin = dp(28)
-        })
-
-        // Scrim
-        scrim = View(this).apply {
-            setBackgroundColor(Color.argb(if (dark) 150 else 90, 0, 0, 0))
-            alpha = 0f
-            visibility = View.GONE
-            setOnClickListener { closeSheet() }
-        }
-        root.addView(scrim, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // Sheet
-        sheetHeight = (resources.displayMetrics.heightPixels * 0.82f).toInt()
-        sheet = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = GlassDrawable(
-                this@MainActivity, 34f, dark,
-                if (dark) Color.argb(244, 24, 24, 30) else Color.argb(246, 250, 250, 252)
-            )
-            translationY = sheetHeight.toFloat()
-        }
-        val handle = View(this).apply {
-            setBackgroundColor(if (dark) Color.argb(90, 255, 255, 255) else Color.argb(60, 0, 0, 0))
-        }
-        sheet.addView(handle, LinearLayout.LayoutParams(dp(40), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(10) })
-
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(24), dp(14), dp(18), dp(6))
-        }
-        val hTitle = TextView(this).apply {
-            text = "Customize"
-            typeface = serif
-            textSize = 26f
-            setTextColor(textColor)
-        }
-        val done = glassButton("Done", null, small = true) { closeSheet() }
-        header.addView(hTitle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        header.addView(done)
-        sheet.addView(header)
-
-        scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
-        content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(4), dp(18), dp(24))
-        }
-        scroll.addView(content)
-        sheet.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        root.addView(sheet, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, sheetHeight, Gravity.BOTTOM))
-
-        buildContent()
-        setContentView(root)
-
-        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-            val b = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            topInset = b.top
-            bottomInset = b.bottom
-            (dock.layoutParams as FrameLayout.LayoutParams).bottomMargin = dp(28) + bottomInset
-            dock.requestLayout()
-            content.setPadding(dp(18), dp(4), dp(18), dp(24) + bottomInset)
-            insets
-        }
-    }
-
-    // ---------------------------------------------------------------- sheet
-
-    private fun openSheet() {
-        if (sheetOpen) return
-        sheetOpen = true
-        scrim.visibility = View.VISIBLE
-        scrim.animate().alpha(1f).setDuration(260).start()
-        sheet.animate().translationY(0f).setDuration(420).setInterpolator(DecelerateInterpolator(2.2f)).start()
-    }
-
-    private fun closeSheet() {
-        if (!sheetOpen) return
-        sheetOpen = false
-        scrim.animate().alpha(0f).setDuration(220).withEndAction { scrim.visibility = View.GONE }.start()
-        sheet.animate().translationY(sheetHeight.toFloat()).setDuration(320).setInterpolator(DecelerateInterpolator(1.6f)).start()
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (sheetOpen) closeSheet() else super.onBackPressed()
-    }
-
-    // ---------------------------------------------------------------- settings content
-
-    private fun buildContent() {
-        content.removeAllViews()
-        val s = Config.Snap(prefs)
-
-        section("Style")
-        val styleScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
-        val styleRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, dp(4)) }
-        for (st in WStyle.values()) {
-            val sel = st == s.style
-            val chip = glassButton(st.label, if (sel) accent else null, small = true) {
-                putInt(Config.K_STYLE, st.ordinal)
-                rebuildKeepScroll()
-            }
-            styleRow.addView(chip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { rightMargin = dp(8) })
-        }
-        styleScroll.addView(styleRow)
-        content.addView(styleScroll)
-
-        section("Colors")
-        val palScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
-        val palRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(4), 0, dp(4)) }
-        Palettes.all.forEachIndexed { idx, pal ->
-            val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
-            col.addView(Swatch(this, pal, idx == s.palette, dark))
-            col.addView(TextView(this).apply {
-                text = pal.name
-                textSize = 11f
-                setTextColor(subColor)
-                gravity = Gravity.CENTER
-            })
-            col.setOnClickListener {
-                putInt(Config.K_PALETTE, idx)
-                accent = pal.accent
-                primaryBtn?.background = GlassDrawable(this, 999f, dark, accentFill(accent))
-                primaryBtn?.setTextColor(onColor(accent))
-                rebuildKeepScroll()
-            }
-            palRow.addView(col, LinearLayout.LayoutParams(dp(62), ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
-        palScroll.addView(palRow)
-        content.addView(palScroll)
-
-        section("Tiles")
-        card().also { c ->
-            sliderRow(c, "Grid density", 5, 24, s.cols, { "${it} columns" }) { putInt(Config.K_COLS, it) }
-            sliderRow(c, "Gap", 0, 8, s.gap, { "$it dp" }) { putInt(Config.K_GAP, it) }
-            sliderRow(c, "Corner radius", 0, 50, s.radius, { "$it%" }) { putInt(Config.K_RADIUS, it) }
-        }
-
-        section("Motion")
-        card().also { c ->
-            sliderRow(c, "Animation speed", 50, 200, s.speed, { "$it%" }) { putInt(Config.K_SPEED, it) }
-            switchRow(c, "Animate on unlock", s.unlock) { putBool(Config.K_UNLOCK, it) }
-            switchRow(c, "Touch interaction", s.touch) { putBool(Config.K_TOUCH, it) }
-            val replay = glassButton("Replay animation", null, small = true) {
-                prefs.edit().putLong(Config.K_REPLAY, System.currentTimeMillis()).apply()
-                Toast.makeText(this, "Visible when the wallpaper is on screen", Toast.LENGTH_SHORT).show()
-            }
-            c.addView(replay, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
-        }
-
-        section("Blur")
-        card().also { c ->
-            switchRow(c, "Blur curling & vanishing tiles", s.blurOn) { putBool(Config.K_BLUR, it) }
-            sliderRow(c, "Blur strength", 0, 100, s.blurAmt, { "$it%" }) { putInt(Config.K_BLURAMT, it) }
-        }
-
-        section("Glass")
-        card().also { c ->
-            switchRow(c, "Glass reflections & tilt sheen", s.sheen) { putBool(Config.K_SHEEN, it) }
-            switchRow(c, "Tile edge highlight", s.edge) { putBool(Config.K_EDGE, it) }
-        }
-
-        section("Background")
-        card().also { c ->
-            switchRow(c, "Use my photo", s.photo) {
-                if (it && !File(filesDir, "photo.jpg").exists()) {
-                    pickPhoto()
-                } else {
-                    putBool(Config.K_PHOTO, it)
-                }
-            }
-            val pick = glassButton("Choose photo…", null, small = true) { pickPhoto() }
-            c.addView(pick, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
-        }
-    }
-
-    private fun rebuildKeepScroll() {
-        val y = scroll.scrollY
-        buildContent()
-        scroll.post { scroll.scrollTo(0, y) }
-    }
-
-    private fun section(name: String) {
-        content.addView(TextView(this).apply {
-            text = name.uppercase()
-            textSize = 12f
-            letterSpacing = 0.14f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setTextColor(subColor)
-            setPadding(dp(6), dp(20), 0, dp(6))
-        })
-    }
-
-    private fun card(): LinearLayout {
+    private fun card(title: String, parent: LinearLayout): LinearLayout {
         val c = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(10), dp(16), dp(12))
-            background = GlassDrawable(
-                this@MainActivity, 24f, dark,
-                if (dark) Color.argb(20, 255, 255, 255) else Color.argb(170, 255, 255, 255)
-            )
+            orientation = LinearLayout.VERTICAL; background = Glass(dp(32).toFloat(), dark)
+            setPadding(dp(20), dp(18), dp(20), dp(20))
         }
-        content.addView(c, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        c.addView(TextView(this).apply {
+            text = title; textSize = 12f; setTextColor(sub); letterSpacing = 0.1f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); setPadding(dp(2), 0, 0, dp(10))
+        })
+        parent.addView(c, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(16) })
         return c
     }
 
-    private fun sliderRow(parent: LinearLayout, label: String, min: Int, max: Int, value: Int, fmt: (Int) -> String, onChange: (Int) -> Unit) {
-        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(8), 0, 0) }
-        val l = TextView(this).apply { text = label; textSize = 15f; setTextColor(textColor) }
-        val v = TextView(this).apply { text = fmt(value); textSize = 14f; setTextColor(accent) }
-        top.addView(l, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        top.addView(v)
-        parent.addView(top)
-        parent.addView(GlassSlider(this, min, max, value, dark, accent) {
-            v.text = fmt(it)
-            onChange(it)
-        })
-    }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.statusBarColor = Color.TRANSPARENT
+        if (!dark) window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(64), dp(18), dp(48))
+        }
+        root.addView(TextView(this).apply {
+            text = "Lucidream"; textSize = 36f; setTextColor(ink); gravity = Gravity.CENTER
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD); letterSpacing = -0.02f
+        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        root.addView(TextView(this).apply {
+            text = "Live Wallpaper"; textSize = 14f; setTextColor(sub); gravity = Gravity.CENTER; letterSpacing = 0.05f
+        }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
 
-    private fun switchRow(parent: LinearLayout, label: String, value: Boolean, onChange: (Boolean) -> Unit) {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(4), 0, dp(4)) }
-        row.addView(TextView(this).apply { text = label; textSize = 15f; setTextColor(textColor) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(GlassSwitch(this, value, dark, accent, onChange))
-        parent.addView(row)
-    }
+        fun curBg() = prefs.getInt("bg", Color.WHITE).let { it to prefs.getInt("bg2", it) }
+        preview = object : View(this) {
+            val p = Paint(Paint.ANTI_ALIAS_FLAG)
+            override fun onDraw(cv: Canvas) {
+                val (b1, b2) = curBg()
+                val fg = Config.fgFor(b1, b2)
+                val size = prefs.getFloat("size", 1f); val cover = prefs.getFloat("cover", 0.66f)
+                val rows = 5; val cols = 9; val cw = width / cols.toFloat()
+                for (r in 0 until rows) {
+                    val k = r / rows.toFloat()
+                    val sc = (1f - 0.75f * k * (0.5f + cover)) * size
+                    p.color = fg; p.alpha = ((1f - k * k * 1.1f).coerceIn(0.05f, 1f) * 255).toInt()
+                    val y = height - dp(16) - r * cw * (0.8f - 0.25f * k)
+                    val h = cw * 0.36f * sc
+                    for (i in 0 until cols) { val x = cw * (i + 0.5f); cv.drawRoundRect(x - h, y - h, x + h, y + h, 3f, 3f, p) }
+                }
+            }
+        }
+        fun setPreviewBg() {
+            val (a, b) = curBg()
+            preview.background = LayerDrawable(arrayOf(bgDraw(a, b, 32), Glass(dp(32).toFloat(), true)))
+            preview.invalidate()
+        }
+        setPreviewBg()
+        root.addView(preview, LinearLayout.LayoutParams(MATCH_PARENT, dp(180)).apply { topMargin = dp(22) })
 
-    private fun accentFill(a: Int) = Color.argb(205, Color.red(a), Color.green(a), Color.blue(a))
+        // ---- colours
+        val bgCard = card("BACKGROUND", root)
+        val swatches = ArrayList<View>()
+        fun refresh() {
+            val (a, b) = curBg()
+            swatches.forEach { v ->
+                val (x, y) = v.tag as Pair<Int, Int>
+                val sel = x == a && y == b
+                v.background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(x, y)).apply {
+                    shape = GradientDrawable.OVAL
+                    if (sel) setStroke(dp(3), accent) else setStroke(dp(1), if (dark) 0x44FFFFFF else 0x33000000)
+                }
+                v.scaleX = if (sel) 1.1f else 1f; v.scaleY = v.scaleX
+            }
+        }
+        fun section(name: String, items: String) {
+            bgCard.addView(TextView(this).apply { text = name; textSize = 13f; setTextColor(sub); setPadding(dp(2), dp(10), 0, dp(4)) })
+            items.split(" ").chunked(6).forEach { rc ->
+                val row = LinearLayout(this).apply { gravity = Gravity.CENTER }
+                rc.forEach { s ->
+                    val pr = pair(s)
+                    val v = View(this).apply { tag = pr }
+                    v.setOnClickListener {
+                        prefs.edit().putInt("bg", pr.first).putInt("bg2", pr.second).apply(); setPreviewBg(); refresh()
+                    }
+                    swatches.add(v)
+                    row.addView(FrameLayout(this).apply { addView(v, FrameLayout.LayoutParams(dp(42), dp(42), Gravity.CENTER)) },
+                        LinearLayout.LayoutParams(0, dp(52), 1f))
+                }
+                repeat(6 - rc.size) { row.addView(View(this), LinearLayout.LayoutParams(0, dp(52), 1f)) }
+                bgCard.addView(row)
+            }
+        }
+        section("Neutrals", "FFFFFF F2F2F7 D1D1D6 8E8E93 3A3A3C 000000")
+        section("Pastel", "FFD6E0 FFC8DD FFDAB9 FFE5B4 FFF3B0 F2E4D8 C8F2D8 B8F0E0 C9E6FF BDD7FF E0D4FF F0C8FF")
+        section("Vivid", "0A84FF 5E5CE6 BF5AF2 FF375F FF453A FF9F0A FFD60A 30D158 64D2FF 63E6E2 AC8E68 FF6482")
+        section("Deep", "1B2A41 2D1B3D 143D33 4A1D2A 0F3D4A 3B3A1C")
+        section("Gradients", "FF9A8B-FF6A88 2193B0-6DD5ED 00C9A7-845EC2 FFECD2-FCB69F E0C3FC-8EC5FC 0F2027-2C5364 " +
+            "41295A-2F0743 D4FC79-96E6A1 F6D365-FDA085 8E2DE2-4A00E0 232526-414345 E0EAFC-CFDEF3")
+        refresh()
 
-    private fun glassButton(text: String, tint: Int?, small: Boolean = false, onClick: () -> Unit): TextView {
-        return TextView(this).apply {
-            this.text = text
-            textSize = if (small) 14f else 16f
-            gravity = Gravity.CENTER
+        // ---- animation styles (two rows of four)
+        val animCard = card("MOTION", root)
+        val tabs = ArrayList<TextView>()
+        fun refreshTabs() {
+            val cur = prefs.getInt("anim", 0)
+            tabs.forEachIndexed { i, t ->
+                t.background = if (i == cur) Glass(dp(16).toFloat(), dark, true) else null
+                t.setTextColor(if (i == cur) (if (dark) Color.WHITE else ink) else sub)
+            }
+        }
+        listOf(listOf("Wave", "Breathe", "Drift", "Flow"), listOf("Ripple", "Sway", "Cascade", "Orbit")).forEachIndexed { ri, names ->
+            val seg = LinearLayout(this).apply {
+                background = GradientDrawable().apply { setColor(if (dark) 0x26FFFFFF else 0x14000000); cornerRadius = dp(20).toFloat() }
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+            }
+            names.forEachIndexed { k, n ->
+                val idx = ri * 4 + k
+                val t = TextView(this).apply {
+                    text = n; textSize = 14f; gravity = Gravity.CENTER; setPadding(0, dp(11), 0, dp(11))
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                    setOnClickListener { prefs.edit().putInt("anim", idx).apply(); refreshTabs() }
+                }
+                tabs.add(t); seg.addView(t, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            }
+            animCard.addView(seg, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { if (ri > 0) topMargin = dp(8) })
+        }
+        refreshTabs()
+
+        // ---- settings
+        val sc = card("SETTINGS", root)
+        fun slider(label: String, key: String, mn: Float, mx: Float, def: Float, fmt: (Float) -> String) {
+            val head = LinearLayout(this)
+            val vt = TextView(this).apply { textSize = 15f; setTextColor(sub) }
+            head.addView(TextView(this).apply { text = label; textSize = 17f; setTextColor(ink) }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            head.addView(vt)
+            val cur = prefs.getFloat(key, def); vt.text = fmt(cur)
+            val track = GradientDrawable().apply { setColor(if (dark) 0x33FFFFFF else 0x22000000); cornerRadius = dp(10).toFloat(); setSize(0, dp(16)) }
+            val fillD = ClipDrawable(GradientDrawable().apply { setColor(accent); cornerRadius = dp(10).toFloat(); setSize(0, dp(16)) },
+                Gravity.START, ClipDrawable.HORIZONTAL)
+            val sb = SeekBar(this).apply {
+                max = 1000; progress = ((cur - mn) / (mx - mn) * 1000).toInt()
+                progressDrawable = LayerDrawable(arrayOf(track, fillD)).apply { setId(0, android.R.id.background); setId(1, android.R.id.progress) }
+                thumb = LayerDrawable(arrayOf(
+                    GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE); setSize(dp(36), dp(36)) },
+                    GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.TRANSPARENT); setStroke(dp(1), 0x33000000); setSize(dp(36), dp(36)) }))
+                splitTrack = false; thumbOffset = 0; setPadding(dp(18), 0, dp(18), 0)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(s: SeekBar?, p: Int, u: Boolean) {
+                        val v = mn + (mx - mn) * p / 1000f
+                        prefs.edit().putFloat(key, v).apply(); vt.text = fmt(v); preview.invalidate()
+                    }
+                    override fun onStartTrackingTouch(s: SeekBar?) {}
+                    override fun onStopTrackingTouch(s: SeekBar?) {}
+                })
+            }
+            sc.addView(head, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(10) })
+            sc.addView(sb, LinearLayout.LayoutParams(MATCH_PARENT, dp(52)))
+        }
+        slider("Curl height", "cover", 0.4f, 0.95f, 0.66f) { "${(it * 100).toInt()}%" }
+        slider("Speed", "speed", 0.3f, 2.5f, 1f) { "×" + "%.1f".format(it) }
+        slider("Square size", "size", 0.7f, 1.3f, 1f) { "${(it * 100).toInt()}%" }
+        slider("Edge blur", "blur", 0f, 1f, 0.35f) { if (it < 0.02f) "Off" else "${(it * 100).toInt()}%" }
+
+        fun toggle(label: String, key: String, def: Boolean) {
+            val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+            row.addView(TextView(this).apply { text = label; textSize = 17f; setTextColor(ink) }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            row.addView(Switch(this).apply {
+                isChecked = prefs.getBoolean(key, def)
+                thumbTintList = ColorStateList.valueOf(Color.WHITE)
+                trackTintList = ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                    intArrayOf(Color.parseColor("#34C759"), if (dark) 0x44FFFFFF else 0x33000000))
+                setOnCheckedChangeListener { _, c -> prefs.edit().putBoolean(key, c).apply() }
+            })
+            sc.addView(row, LinearLayout.LayoutParams(MATCH_PARENT, dp(54)))
+        }
+        toggle("Unlock fly-away", "unlock", true)
+        toggle("Tilt parallax", "tilt", true)
+        toggle("Smooth 60 FPS", "fps60", false)
+
+        root.addView(TextView(this).apply {
+            text = "Set wallpaper"; textSize = 18f; gravity = Gravity.CENTER; setTextColor(Color.WHITE)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setTextColor(if (tint != null) onColor(tint) else textColor)
-            val ph = if (small) 16 else 22
-            val pv = if (small) 10 else 16
-            setPadding(dp(ph), dp(pv), dp(ph), dp(pv))
-            background = GlassDrawable(this@MainActivity, 999f, dark, tint?.let { accentFill(it) })
+            background = LayerDrawable(arrayOf(bgDraw(Color.parseColor("#2A8CFF"), Color.parseColor("#0A5FE0"), 30), Glass(dp(30).toFloat(), true)))
             isClickable = true
-            setOnClickListener { onClick() }
-            setOnTouchListener { v, e ->
-                when (e.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(90).start()
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.animate().scaleX(1f).scaleY(1f).setDuration(160).start()
-                }
-                false
+            setOnClickListener {
+                try {
+                    startActivity(Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).putExtra(
+                        WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
+                        ComponentName(this@MainActivity, CurlWallpaperService::class.java)))
+                } catch (e: Exception) { startActivity(Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER)) }
             }
-        }
-    }
+        }, LinearLayout.LayoutParams(MATCH_PARENT, dp(60)).apply { topMargin = dp(24) })
 
-    // ---------------------------------------------------------------- prefs / actions
-
-    private fun putInt(k: String, v: Int) = prefs.edit().putInt(k, v).apply()
-    private fun putBool(k: String, v: Boolean) = prefs.edit().putBoolean(k, v).apply()
-
-    private fun setWallpaper() {
-        try {
-            startActivity(
-                Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).putExtra(
-                    WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
-                    ComponentName(this, CurlWallpaperService::class.java)
-                )
-            )
-        } catch (e: Exception) {
-            try {
-                startActivity(Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER))
-            } catch (e2: Exception) {
-                Toast.makeText(this, "Open your wallpaper settings and pick Lucidream", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun pickPhoto() {
-        val i = Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
-        @Suppress("DEPRECATION")
-        startActivityForResult(Intent.createChooser(i, "Choose photo"), REQ_PHOTO)
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQ_PHOTO) return
-        if (resultCode != RESULT_OK) {
-            rebuildKeepScroll()
-            return
-        }
-        val uri = data?.data ?: return
-        Thread {
-            try {
-                val dm = resources.displayMetrics
-                val target = max(dm.widthPixels, dm.heightPixels)
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-                var sample = 1
-                while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= target) sample *= 2
-                val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-                val bmp = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
-                if (bmp != null) {
-                    File(filesDir, "photo.jpg").outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, it) }
-                    prefs.edit().putBoolean(Config.K_PHOTO, true).putLong(Config.K_PHOTOVER, System.currentTimeMillis()).apply()
-                }
-            } catch (_: Exception) {
-            }
-            runOnUiThread { rebuildKeepScroll() }
-        }.start()
-    }
-
-    companion object {
-        private const val REQ_PHOTO = 41
+        setContentView(FrameLayout(this).apply {
+            setBackgroundColor(if (dark) Color.parseColor("#0B0B0F") else Color.parseColor("#EDEDF2"))
+            addView(ScrollView(this@MainActivity).apply { isVerticalScrollBarEnabled = false; addView(root) })
+        })
     }
 }
