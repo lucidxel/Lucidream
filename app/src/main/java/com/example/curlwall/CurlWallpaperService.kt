@@ -128,7 +128,7 @@ class CurlWallpaperService : WallpaperService() {
             unlockOn = p.getBoolean("unlock", true)
             rr = floatArrayOf(0f, 0.2f, 0.38f, 0.5f)[p.getInt("round", 0).coerceIn(0, 3)]
             ua = p.getInt("uanim", 0).coerceIn(0, 3)
-            if (!tiltOn) tiltTarget = 0f
+            if (!tiltOn) { tiltTarget = 0f; tiltYTarget = 0f }
             frameMs = if (p.getBoolean("fps60", false)) 16L else 33L
         }
 
@@ -159,6 +159,9 @@ class CurlWallpaperService : WallpaperService() {
         private var py = -9999f
         private var tilt = 0f
         private var tiltTarget = 0f
+        private var tiltY = 0f
+        private var tiltYTarget = 0f
+        private var baseY = Float.NaN
 
         private val t0 = SystemClock.uptimeMillis()
         private var lastT = t0
@@ -195,6 +198,7 @@ class CurlWallpaperService : WallpaperService() {
             visible = v
             if (v) {
                 loadCfg()
+                baseY = Float.NaN
                 lastT = SystemClock.uptimeMillis()
                 if (tiltOn) sensors.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
                     sensors.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
@@ -235,6 +239,12 @@ class CurlWallpaperService : WallpaperService() {
 
         override fun onSensorChanged(event: SensorEvent) {
             tiltTarget = (-event.values[0] / 6f).coerceIn(-1f, 1f)
+            // vertical tilt is measured against a slowly re-centring baseline,
+            // so any comfortable holding angle counts as "neutral"
+            val y = event.values[1]
+            if (baseY.isNaN()) baseY = y
+            baseY += (y - baseY) * 0.015f
+            tiltYTarget = ((y - baseY) / 4f).coerceIn(-1f, 1f)
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -270,7 +280,6 @@ class CurlWallpaperService : WallpaperService() {
                 }
                 canvas.drawRect(0f, 0f, pw.toFloat(), ph.toFloat(), bgPaint)
             }
-            // after the unlock animation only the background remains (keep animating it if it is a gradient)
             if (exitT > 0L && now - exitT > 1800L) return !gradOn
 
             canvas.save()
@@ -286,6 +295,7 @@ class CurlWallpaperService : WallpaperService() {
             vS *= damp
             vX *= damp
             tilt += (tiltTarget - tilt) * min(1f, dt * 3f)
+            tiltY += (tiltYTarget - tiltY) * min(1f, dt * 3f)
 
             val an = anim
             val Rc = H * cover * (1f + 0.03f * sin(t * 0.25f))
@@ -293,13 +303,16 @@ class CurlWallpaperService : WallpaperService() {
             val yBase = H + c * 0.9f
             val cx = W / 2f
             val h = c * 0.34f * sizeMul
-            val base = floor(S / c).toInt()
-            val frac = S - base * c
+            // vertical parallax: the grid also slides up/down with the phone's pitch
+            val Sv = S + tiltY * c * (if (tmode == 1) 1.0f else 0.12f)
+            val base = floor(Sv / c).toInt()
+            val frac = Sv - base * c
             val Xt = X + tilt * c * (if (tmode == 1) 1.2f else 0.1f)
-            // fold mode: grid turns AGAINST the phone's rotation
+            // fold mode: the grid turns AGAINST the phone's rotation, both ways
             val phi = if (tmode == 0) -tilt * 0.6f else 0f
             val cph = cos(phi)
             val sph = sin(phi)
+            val sphY = if (tmode == 0) sin(tiltY * 0.5f) else 0f
             val colShift = floor(Xt / c).toInt()
             val xFrac = ((Xt % c) + c) % c
 
@@ -313,7 +326,7 @@ class CurlWallpaperService : WallpaperService() {
                 val rowId = j + base
                 val sN = min(1f, max(0f, s0) / (Rc * TH))
 
-                for (i in -1 until cols) {
+                for (i in -3 until cols + 2) {
                     val col = i - colShift
                     val id = rowId * 1000L + col
                     val hh = hash(rowId, col)
@@ -356,12 +369,24 @@ class CurlWallpaperService : WallpaperService() {
                     val x0 = xb + mx
                     val sc0 = s0 + ms
 
+                    // projected centre of the square (same maths as the corners below)
                     val th0 = max(0f, sc0) / Rc
                     val y0 = if (sc0 < 0f) sc0 else Rc * sin(th0)
                     val z0 = if (sc0 < 0f) 0f else Rc * (1f - cos(th0))
-                    val f0 = D / (D + z0)
-                    val sx0 = cx + (x0 - cx) * f0
-                    val sy0 = yBase - y0 * f0
+                    val dxc = x0 - cx
+                    val fc = D / max(D * 0.15f, D + z0 + dxc * sph * 2.4f)
+                    var sx0 = cx + dxc * cph * fc
+                    var sy0 = yBase - y0 * fc
+                    if (sphY != 0f) {
+                        val fv = D / max(D * 0.15f, D + (sy0 - H / 2f) * sphY * 2f)
+                        sx0 = cx + (sx0 - cx) * fv
+                        sy0 = H / 2f + (sy0 - H / 2f) * fv
+                    }
+
+                    // squares entering from outside the screen grow in smoothly
+                    val inner = min(min(sx0, W - sx0), H + c * 0.6f - sy0)
+                    val ef = sm(-0.9f * c, 0.25f * c, inner)
+                    a *= ef
 
                     var tg = 0f
                     var dxn = 0f
@@ -391,7 +416,8 @@ class CurlWallpaperService : WallpaperService() {
                     val cxp = x0 + dxn * e * c * 0.22f
                     val csp = sc0 - dyn * e * c * 0.22f
                     val lift = e * c * 0.45f
-                    val g = (1f - 0.72f * sN.pow(0.9f)) * br * (1f + 0.12f * e) * (1f - (if (ua == 3) 0.6f * u else 0f))
+                    val g = (1f - 0.72f * sN.pow(0.9f)) * br * (1f + 0.12f * e) *
+                        (1f - (if (ua == 3) 0.6f * u else 0f)) * (0.2f + 0.8f * ef)
                     val fly = u * u
 
                     for (q in 0 until 4) {
@@ -403,8 +429,15 @@ class CurlWallpaperService : WallpaperService() {
                         val zz = (if (qsp < 0f) 0f else Rc * (1f - cos(th))) - lift -
                             fly * Rc * zMul[ua] + dxq * sph * 2.4f
                         val f = D / max(D * 0.15f, D + zz)
-                        pxs[q] = cx + dxq * cph * f
-                        pys[q] = yBase - yy * f + fly * H * 0.6f * vyMul[ua]
+                        var vx = cx + dxq * cph * f
+                        var vy = yBase - yy * f + fly * H * 0.6f * vyMul[ua]
+                        if (sphY != 0f) {
+                            val fv = D / max(D * 0.15f, D + (vy - H / 2f) * sphY * 2f)
+                            vx = cx + (vx - cx) * fv
+                            vy = H / 2f + (vy - H / 2f) * fv
+                        }
+                        pxs[q] = vx
+                        pys[q] = vy
                         if (ua == 1 && u > 0f) {
                             val eu = u * u * (3f - 2f * u)
                             val s = 1f + eu * eu * 2.6f
@@ -419,7 +452,7 @@ class CurlWallpaperService : WallpaperService() {
                     if (blv > 0.02f) {
                         paint.style = Paint.Style.FILL_AND_STROKE
                         paint.strokeJoin = Paint.Join.ROUND
-                        val sw = 16f * blv * f0
+                        val sw = 16f * blv * fc
                         for (n in 3 downTo 1) {
                             paint.strokeWidth = sw * n / 3f
                             paint.alpha = (al * 0.2f * 255f).toInt()
