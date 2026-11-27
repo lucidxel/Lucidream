@@ -53,7 +53,6 @@ class CurlWallpaperService : WallpaperService() {
         private var frameMs = 33L
         private var visible = false
 
-        // config
         private var bg = Color.WHITE
         private var bg2 = Color.WHITE
         private var bgDirty = true
@@ -66,8 +65,14 @@ class CurlWallpaperService : WallpaperService() {
         private var unlockOn = true
         private var rr = 0f
         private var ua = 0
-        private val vyMul = floatArrayOf(1f, -1f, 0f, 0f)
-        private val zMul = floatArrayOf(1.2f, 1.2f, 1.9f, 0f)
+        //                              Wave   Breathe Drift Flow Ripple Sway Cascade Orbit
+        private val flow = floatArrayOf(-14f, 0f, 6f, 34f, -8f, 10f, 0f, 5f)
+        private val waveM = floatArrayOf(1f, 0.4f, 0.5f, 1.4f, 0.3f, 0.6f, 1.2f, 0.5f)
+        private val driftM = floatArrayOf(1f, 0.4f, 2.2f, 0.6f, 0.5f, 0.5f, 0.3f, 1.6f)
+        private val breathM = floatArrayOf(1f, 3f, 1f, 0.6f, 1f, 1f, 1f, 1f)
+        //                               Down  iOS    Zoom  Dissolve
+        private val vyMul = floatArrayOf(1f, -0.25f, 0f, 0f)
+        private val zMul = floatArrayOf(1.2f, 1.5f, 1.9f, 0f)
         private val pxs = FloatArray(4)
         private val pys = FloatArray(4)
 
@@ -80,22 +85,19 @@ class CurlWallpaperService : WallpaperService() {
             }
             val kp = 0.5523f
             for (q in 0 until 4) {
-                val a = (q + 3) % 4; val b = (q + 1) % 4
-                val sx = pxs[q] + (pxs[a] - pxs[q]) * rr; val sy = pys[q] + (pys[a] - pys[q]) * rr
-                val ex = pxs[q] + (pxs[b] - pxs[q]) * rr; val ey = pys[q] + (pys[b] - pys[q]) * rr
+                val a = (q + 3) % 4
+                val b = (q + 1) % 4
+                val sx = pxs[q] + (pxs[a] - pxs[q]) * rr
+                val sy = pys[q] + (pys[a] - pys[q]) * rr
+                val ex = pxs[q] + (pxs[b] - pxs[q]) * rr
+                val ey = pys[q] + (pys[b] - pys[q]) * rr
                 if (q == 0) path.moveTo(sx, sy) else path.lineTo(sx, sy)
                 path.cubicTo(sx + (pxs[q] - sx) * kp, sy + (pys[q] - sy) * kp,
                     ex + (pxs[q] - ex) * kp, ey + (pys[q] - ey) * kp, ex, ey)
             }
             path.close()
         }
-        //                              Wave  Breathe Drift Flow Ripple Sway Cascade Orbit
-        private val flow = floatArrayOf(14f, 0f, 6f, 34f, 8f, 10f, 0f, 5f)
-        private val waveM = floatArrayOf(1f, 0.4f, 0.5f, 1.4f, 0.3f, 0.6f, 1.2f, 0.5f)
-        private val driftM = floatArrayOf(1f, 0.4f, 2.2f, 0.6f, 0.5f, 0.5f, 0.3f, 1.6f)
-        private val breathM = floatArrayOf(1f, 3f, 1f, 0.6f, 1f, 1f, 1f, 1f)
 
-        // lock / unlock
         private val km by lazy { getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager }
         private var exitT = 0L
         private var prevLocked = false
@@ -248,7 +250,6 @@ class CurlWallpaperService : WallpaperService() {
             if (visible && !idle) handler.postDelayed(runner, frameMs)
         }
 
-        /** returns true when only the plain background is shown (no need to keep animating) */
         private fun render(canvas: Canvas): Boolean {
             val now = SystemClock.uptimeMillis()
             checkLock(now)
@@ -317,11 +318,15 @@ class CurlWallpaperService : WallpaperService() {
                     var a = vis * (if (sN < 0.08f) 1f - (1f - lum) * sN / 0.08f * 0.7f else lum) * fade
                     a *= 1f - sm(0.82f, 1f, sN)
 
-                    // unlock fly-away: top rows first, toward the viewer and down
                     var u = 0f
                     if (exitT > 0L) {
                         val ph0 = (now - exitT) / 1000f
-                            val dl = when (ua) { 0 -> (1f - sN) * 0.5f; 1 -> sN * 0.5f; 2 -> hh * 0.15f; else -> hh * 0.5f }
+                        val dl = when (ua) {
+                            0 -> (1f - sN) * 0.5f
+                            1 -> sN * 0.35f + abs(xb - cx) / W * 0.3f
+                            2 -> hh * 0.15f
+                            else -> hh * 0.5f
+                        }
                         u = ((ph0 - dl) / 0.8f).coerceIn(0f, 1f)
                         a *= 1f - u * u * u
                         if (u >= 1f) continue
@@ -373,10 +378,10 @@ class CurlWallpaperService : WallpaperService() {
                     val cxp = x0 + dxn * e * c * 0.22f
                     val csp = sc0 - dyn * e * c * 0.22f
                     val lift = e * c * 0.45f
-                    val g = (1f - 0.72f * sN.pow(0.9f)) * br * (1f + 0.12f * e) * (1f - (if (ua == 3) 0.6f * u else 0f))
+                    val g = (1f - 0.72f * sN.pow(0.9f)) * br * (1f + 0.12f * e) *
+                        (1f + (if (ua == 1) 0.6f * u else 0f) - (if (ua == 3) 0.6f * u else 0f))
                     val fly = u * u
 
-                    path.reset()
                     for (q in 0 until 4) {
                         val qxp = cxp + qx[q] * h * g
                         val qsp = csp + qy[q] * h * g
@@ -384,16 +389,14 @@ class CurlWallpaperService : WallpaperService() {
                         val yy = if (qsp < 0f) qsp else Rc * sin(th)
                         val zz = (if (qsp < 0f) 0f else Rc * (1f - cos(th))) - lift - fly * Rc * zMul[ua]
                         val f = D / (D + zz)
-                        val sx = cx + (qxp - cx) * f
-                        val sy = yBase - yy * f + fly * H * 0.6f * vyMul[ua]
-                        pxs[q] = sx; pys[q] = sy
+                        pxs[q] = cx + (qxp - cx) * f
+                        pys[q] = yBase - yy * f + fly * H * 0.6f * vyMul[ua]
                     }
                     buildPath()
 
                     val al = min(1f, a + e * 0.5f * (if (a > 0.02f) 1f else 0.6f)).coerceIn(0f, 1f)
                     val blv = blurS * max(sN.pow(1.3f), u)
                     if (blv > 0.02f) {
-                        // soft halo = blur look: wide translucent strokes under the core
                         paint.style = Paint.Style.FILL_AND_STROKE
                         paint.strokeJoin = Paint.Join.ROUND
                         val sw = 16f * blv * f0
