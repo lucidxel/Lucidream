@@ -97,8 +97,13 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = Color.TRANSPARENT
-        if (!dark) window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        val pageBg = if (dark) Color.parseColor("#0B0B0F") else Color.parseColor("#EDEDF2")
+        window.setBackgroundDrawable(ColorDrawable(pageBg))
+        window.statusBarColor = pageBg
+        window.navigationBarColor = pageBg
+        window.decorView.systemUiVisibility = if (dark) 0 else
+            (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or (if (android.os.Build.VERSION.SDK_INT >= 26) View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR else 0))
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(64), dp(16), dp(130))
         }
@@ -111,31 +116,71 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
 
         fun curBg() = prefs.getInt("bg", Color.WHITE).let { it to prefs.getInt("bg2", it) }
+
+        // ---------- phone-mockup preview
         preview = object : View(this) {
             val p = Paint(Paint.ANTI_ALIAS_FLAG)
+            val clip = Path()
+            fun sm(a: Float, b: Float, x: Float): Float { val t = ((x - a) / (b - a)).coerceIn(0f, 1f); return t * t * (3f - 2f * t) }
             override fun onDraw(cv: Canvas) {
                 val (b1, b2) = curBg()
-                p.color = Config.fgFor(b1, b2)
-                val size = prefs.getFloat("size", 1f); val cover = prefs.getFloat("cover", 0.66f).coerceAtMost(1f)
+                val fg = Config.fgFor(b1, b2)
+                val size = prefs.getFloat("size", 1f); val cover = prefs.getFloat("cover", 0.66f)
                 val rf = floatArrayOf(0f, 0.2f, 0.38f, 0.5f)[prefs.getInt("round", 0).coerceIn(0, 3)]
-                val rows = 5; val cols = 9; val cw = width / cols.toFloat()
-                for (r in 0 until rows) {
-                    val k = r / rows.toFloat()
-                    val sc = (1f - 0.75f * k * (0.5f + cover)) * size
-                    p.alpha = ((1f - k * k * 1.1f).coerceIn(0.05f, 1f) * 255).toInt()
-                    val y = height - dp(18) - r * cw * (0.8f - 0.25f * k)
-                    val h = cw * 0.36f * sc
-                    for (i in 0 until cols) { val x = cw * (i + 0.5f); cv.drawRoundRect(x - h, y - h, x + h, y + h, rf * 2 * h, rf * 2 * h, p) }
+                val ph = height - dp(8).toFloat(); val pw = ph * 0.5f
+                val l = (width - pw) / 2f; val t = dp(4).toFloat()
+                val rect = RectF(l, t, l + pw, t + ph); val rad = pw * 0.15f
+                clip.reset(); clip.addRoundRect(rect, rad, rad, Path.Direction.CW)
+                cv.save(); cv.clipPath(clip)
+                p.style = Paint.Style.FILL
+                p.shader = LinearGradient(0f, t, 0f, t + ph, b1, b2, Shader.TileMode.CLAMP)
+                cv.drawRect(rect, p); p.shader = null
+                val c = pw / 6.2f; val Rc = ph * cover; val D = Rc * 2.2f; val yBase = t + ph + c * 0.9f
+                val h = c * 0.34f * size; val cx = l + pw / 2f; val TH = 1.12f
+                var j = -1
+                while (j < 80) {
+                    val s = j * c; val sN = (s.coerceAtLeast(0f) / (Rc * TH)).coerceIn(0f, 1f)
+                    if (s / Rc > TH) break
+                    val g = 1f - 0.72f * Math.pow(sN.toDouble(), 0.9).toFloat()
+                    val a0 = (1f - Math.pow(sN.toDouble(), 1.6).toFloat() * 0.55f) * (1f - sm(0.82f, 1f, sN))
+                    for (i in 0 until 7) {
+                        val hv = ((i * 7 + j * 13 + 100) % 10) / 10f
+                        if (hv < 0.05f + 0.5f * sN * sN) continue
+                        val a = a0 * (0.55f + 0.45f * (((i * 3 + j * 5 + 100) % 7) / 7f))
+                        if (a < 0.02f) continue
+                        val x0 = l + (i - 0.5f) * c
+                        fun pr(ps: Float): Pair<Float, Float> {
+                            val th = ps.coerceAtLeast(0f) / Rc
+                            val y = if (ps < 0f) ps else Rc * Math.sin(th.toDouble()).toFloat()
+                            val z = if (ps < 0f) 0f else Rc * (1f - Math.cos(th.toDouble()).toFloat())
+                            val f = D / (D + z); return f to (yBase - y * f)
+                        }
+                        val (f1, yt) = pr(s + h * g); val (f2, yb) = pr(s - h * g)
+                        val f = (f1 + f2) / 2f
+                        val x1 = cx + (x0 - h * g - cx) * f; val x2 = cx + (x0 + h * g - cx) * f
+                        p.color = fg; p.alpha = (a.coerceIn(0f, 1f) * 255).toInt()
+                        val r = rf * (x2 - x1)
+                        cv.drawRoundRect(x1, yt, x2, yb, r, r, p)
+                    }
+                    j++
                 }
+                p.color = fg; p.alpha = 235; p.textSize = pw * 0.2f; p.textAlign = Paint.Align.CENTER; p.typeface = medium
+                cv.drawText("9:41", cx, t + pw * 0.42f, p)
+                p.textSize = pw * 0.065f; p.alpha = 150
+                cv.drawText("Friday, November 27", cx, t + pw * 0.54f, p)
+                cv.restore()
+                p.style = Paint.Style.STROKE; p.strokeWidth = dp(1).toFloat()
+                p.color = if (dark) 0x44FFFFFF else 0x33000000
+                cv.drawRoundRect(rect, rad, rad, p)
+                p.strokeWidth = dp(3).toFloat() / 1.5f
+                p.shader = LinearGradient(0f, t, 0f, t + ph, intArrayOf(0xEEFFFFFF.toInt(), 0x22FFFFFF, 0x22FFFFFF, 0x88FFFFFF.toInt()),
+                    floatArrayOf(0f, 0.3f, 0.7f, 1f), Shader.TileMode.CLAMP)
+                cv.drawRoundRect(rect, rad, rad, p); p.shader = null
+                p.style = Paint.Style.FILL
             }
         }
-        fun setPreviewBg() {
-            val (a, b) = curBg()
-            preview.background = LayerDrawable(arrayOf(gd(a, b, 34), Glass(dp(34).toFloat(), true)))
-            preview.invalidate()
-        }
-        setPreviewBg()
-        root.addView(preview, LinearLayout.LayoutParams(MATCH_PARENT, dp(190)).apply { topMargin = dp(22) })
+        fun setPreviewBg() { preview.invalidate() }
+        root.addView(preview, LinearLayout.LayoutParams(MATCH_PARENT, dp(340)).apply { topMargin = dp(18) })
 
         // ---------- colours
         header("Background", root)
@@ -168,6 +213,7 @@ class MainActivity : Activity() {
             if (!last) divider(cg)
         }
         section("Neutrals", "FFFFFF F2F2F7 D1D1D6 8E8E93 3A3A3C 000000")
+        section("Mono gradients", "FFFFFF-8E8E93 FFFFFF-000000 F2F2F7-D1D1D6 D1D1D6-3A3A3C 8E8E93-000000 3A3A3C-000000 000000-3A3A3C 000000-FFFFFF 8E8E93-FFFFFF 000000-8E8E93 D1D1D6-FFFFFF 3A3A3C-8E8E93")
         section("Pastel", "FFD6E0 FFC8DD FFDAB9 FFE5B4 FFF3B0 F2E4D8 C8F2D8 B8F0E0 C9E6FF BDD7FF E0D4FF F0C8FF")
         section("Vivid", "0A84FF 5E5CE6 BF5AF2 FF375F FF453A FF9F0A FFD60A 30D158 64D2FF 63E6E2 AC8E68 FF6482")
         section("Deep", "1B2A41 2D1B3D 143D33 4A1D2A 0F3D4A 3B3A1C")
@@ -181,7 +227,7 @@ class MainActivity : Activity() {
         header("Corners", root)
         segmented(group(root), listOf(listOf("Sharp", "Soft", "Round", "Circle")), "round")
         header("Unlock animation", root)
-        segmented(group(root), listOf(listOf("Down", "Up", "Zoom", "Dissolve")), "uanim")
+        segmented(group(root), listOf(listOf("Down", "iOS", "Zoom", "Dissolve")), "uanim")
 
         // ---------- settings
         header("Settings", root)
@@ -237,8 +283,11 @@ class MainActivity : Activity() {
         toggle("Smooth 60 FPS", "fps60", false)
 
         val btn = TextView(this).apply {
-            text = "Set wallpaper"; textSize = 18f; gravity = Gravity.CENTER; setTextColor(Color.WHITE); typeface = medium
-            background = LayerDrawable(arrayOf(gd(Color.parseColor("#2A8CFF"), Color.parseColor("#0A5FE0"), 30), Glass(dp(30).toFloat(), true)))
+            text = "Set wallpaper"; textSize = 18f; gravity = Gravity.CENTER; typeface = medium
+            setTextColor(if (dark) Color.BLACK else Color.WHITE)
+            background = LayerDrawable(arrayOf(
+                gd(if (dark) Color.WHITE else Color.parseColor("#1C1C1E"), if (dark) Color.parseColor("#E5E5EA") else Color.BLACK, 30),
+                Glass(dp(30).toFloat(), !dark)))
             isClickable = true
             setOnClickListener {
                 try {
@@ -250,7 +299,7 @@ class MainActivity : Activity() {
         }
 
         setContentView(FrameLayout(this).apply {
-            setBackgroundColor(if (dark) Color.parseColor("#0B0B0F") else Color.parseColor("#EDEDF2"))
+            setBackgroundColor(pageBg)
             addView(ScrollView(this@MainActivity).apply { isVerticalScrollBarEnabled = false; addView(root) })
             addView(btn, FrameLayout.LayoutParams(MATCH_PARENT, dp(58), Gravity.BOTTOM).apply { setMargins(dp(20), 0, dp(20), dp(28)) })
         })
